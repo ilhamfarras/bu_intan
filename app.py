@@ -1,8 +1,14 @@
+import os
 import streamlit as st
 import schedule
 import threading
 import time
 import requests
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import NoSuchElementException, ElementClickInterceptedException
+from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
 from datetime import datetime
@@ -12,7 +18,8 @@ from nltk.tokenize import word_tokenize
 import nltk
 import pandas as pd
 import matplotlib.pyplot as plt
-from wordcloud import WordCloud
+
+nltk.download('punkt')
 
 custom_stopwords = [
     "menjadi", "lebih", "banyak", "memiliki", "dapat", "akan", "dengan",
@@ -21,22 +28,25 @@ custom_stopwords = [
     "memberikan", "kompasiana", "komentar", "selanjutnya"
 ]
 
-nltk.download('punkt')
+def get_mongo_client():
+    mongo_uri = os.getenv("MONGODB_CONNECTION_STRING")
+    if not mongo_uri:
+        raise ValueError("Environment variable MONGODB_CONNECTION_STRING belum diset!")
+    return MongoClient(mongo_uri)
 
-# Fungsi MongoDB
 def save_to_mongodb(data, db_name="artikel_db", collection_name="test"):
-    client = MongoClient("mongodb+srv://test:test123@cluster1.bv983sn.mongodb.net/?retryWrites=true&w=majority&appName=Cluster1")
+    client = get_mongo_client()
     db = client[db_name]
     collection = db[collection_name]
+    data['created_at'] = datetime.now()
     if collection.count_documents({"url": data["url"]}) == 0:
         collection.insert_one(data)
-        st.write(f"[\u2713] Disimpan: {data['title']}")
+        st.write(f"[✓] Disimpan: {data['title']}")
         return True
     else:
         st.write(f"[=] Sudah ada: {data['title']}")
         return False
 
-# Fungsi ambil artikel
 def crawl_article(url):
     try:
         response = requests.get(url)
@@ -49,57 +59,71 @@ def crawl_article(url):
         st.write(f"[ERROR] Gagal crawling artikel: {e}")
         return None
 
-# Fungsi utama crawling
-def crawl_kompasiana(max_articles=50):
-    st.write(f"\U0001F680 Memulai crawling (tanpa Selenium) pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    base_url = "https://www.kompasiana.com/tag/fashion"
-    articles_crawled = 0
-    offset = 0
-    all_links = set()
+def crawl_kompasiana():
+    st.write(f"\U0001F680 Memulai crawling pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless")
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
-    while articles_crawled < max_articles:
-        url = f"{base_url}?offset={offset}"
-        response = requests.get(url)
-        soup = BeautifulSoup(response.text, "html.parser")
-        articles = soup.find_all("div", class_="timeline--item")
+    url = "https://www.kompasiana.com/tag/fashion"
+    driver.get(url)
+    time.sleep(2)
 
-        if not articles:
+    for _ in range(10):
+        try:
+            load_more = driver.find_element(By.ID, "load-more-index-tag")
+            driver.execute_script("arguments[0].click();", load_more)
+            time.sleep(3)
+        except:
             break
 
-        for item in articles:
-            if articles_crawled >= max_articles:
-                break
+    soup = BeautifulSoup(driver.page_source, "html.parser")
+    articles = soup.find_all("div", class_="timeline--item")
+    st.write(f"📄 Artikel ditemukan: {len(articles)}")
+
+    for item in articles:
+        try:
             content_div = item.find("div", class_="artikel--content")
             if not content_div:
                 continue
             title_tag = content_div.find("h2")
             if title_tag and title_tag.a:
-                link = title_tag.a['href'].strip()
-                if link not in all_links:
-                    detail = crawl_article(link)
-                    if detail:
-                        if save_to_mongodb(detail):
-                            articles_crawled += 1
-                            all_links.add(link)
-        offset += 10
-        time.sleep(1)
+                url = title_tag.a['href'].strip()
+                detail = crawl_article(url)
+                if detail:
+                    baru = save_to_mongodb(detail)
+                    if not baru:
+                        break
+        except Exception as e:
+            st.write(f"[ERROR] {e}")
 
-    st.write(f"\u2705 Selesai crawling. Artikel baru: {articles_crawled}")
+    driver.quit()
+    st.write("✅ Selesai crawling.\n")
 
-# Scheduler
 def run_schedule():
     while True:
         schedule.run_pending()
         time.sleep(1)
 
-# Fungsi load dan analisis artikel dari MongoDB
 def load_articles_from_mongodb(db_name="artikel_db", collection_name="test"):
-    client = MongoClient("mongodb+srv://test:test123@cluster1.bv983sn.mongodb.net/?retryWrites=true&w=majority&appName=Cluster1")
+    client = get_mongo_client()
     db = client[db_name]
     collection = db[collection_name]
     return list(collection.find())
 
-# Fungsi untuk preprocessing teks
+def get_crawl_stats_by_date(group_by="daily"):
+    articles = load_articles_from_mongodb()
+    df = pd.DataFrame(articles)
+    if 'created_at' not in df:
+        return pd.DataFrame()
+    df['created_at'] = pd.to_datetime(df['created_at'])
+    if group_by == "weekly":
+        df['period'] = df['created_at'].dt.to_period("W").apply(lambda r: r.start_time)
+    else:
+        df['period'] = df['created_at'].dt.date
+    count_df = df.groupby('period').size().reset_index(name='jumlah')
+    return count_df
+
 def preprocess_text_list(text_list):
     factory = StopWordRemoverFactory()
     default_stopwords = factory.get_stop_words()
@@ -115,83 +139,76 @@ def preprocess_text_list(text_list):
     data_stopremoved = [stopword_filter(tokens) for tokens in data_tokens]
     return data_stopremoved
 
-# visualisasi
-def plot_top_words_line(top_words):
+def plot_top_words_bar(top_words):
     words, counts = zip(*top_words)
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(words, counts, color='black', marker='o', linewidth=2)
+    ax.bar(words, counts, color='skyblue', edgecolor='black')
     ax.set_xlabel("Kata")
     ax.set_ylabel("Frekuensi")
-    ax.set_title("10 Kata Paling Sering Muncul (Line Chart)")
+    ax.set_title("10 Kata Paling Sering Muncul (Diagram Batang)")
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    return fig
+
+def plot_article_trend(df):
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(df['period'], df['jumlah'], marker='o', color='green', linewidth=2)
+    ax.set_xlabel("Tanggal")
+    ax.set_ylabel("Jumlah Artikel")
+    ax.set_title("Tren Jumlah Artikel Dicrawling")
     plt.xticks(rotation=45)
     plt.grid(True)
     plt.tight_layout()
     return fig
 
-def plot_top_words_bar(top_words):
-    words, counts = zip(*top_words)
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.barh(words, counts, color='skyblue')
-    ax.set_xlabel("Frekuensi")
-    ax.set_title("10 Kata Paling Sering Muncul (Bar Chart Horizontal)")
-    plt.tight_layout()
-    return fig
-
-def plot_wordcloud(word_counts):
-    wc = WordCloud(width=800, height=400, background_color='white')
-    wc.generate_from_frequencies(dict(word_counts))
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.imshow(wc, interpolation='bilinear')
-    ax.axis("off")
-    plt.tight_layout()
-    return fig
-
 # Streamlit App UI
-st.title("\ud83d\udcf0 Auto Crawler + Analisis Artikel Kompasiana")
+st.title("📰 Auto Crawler + Analisis Artikel Kompasiana")
 st.write("Crawling artikel dan menganalisis kata yang sering muncul")
 
-st.sidebar.title("\u2699 Pengaturan")
-interval = st.sidebar.selectbox("\u23f1 Interval Crawling:", ["1 jam", "2 jam", "5 jam", "12 jam", "24 jam"])
+st.sidebar.title("⚙ Pengaturan")
+interval = st.sidebar.selectbox("⏱ Interval Crawling:", ["1 jam", "2 jam", "5 jam", "12 jam", "24 jam"])
 
-if st.sidebar.button("\u2705 Aktifkan Jadwal"):
+if st.sidebar.button("✅ Aktifkan Jadwal"):
     hours = int(interval.split()[0])
     schedule.every(hours).hours.do(crawl_kompasiana)
     st.sidebar.success(f"Crawling dijadwalkan setiap {hours} jam.")
+    st.session_state.run_mode = "jadwal"
     scheduler_thread = threading.Thread(target=run_schedule, daemon=True)
     scheduler_thread.start()
 
-if st.sidebar.button("\ud83d\ude80 Jalankan Sekarang"):
+if st.sidebar.button("🚀 Jalankan Sekarang"):
+    st.session_state.run_mode = "manual"
     crawl_kompasiana()
 
 # Analisis kata
-st.header("\ud83d\udcca Analisis Kata Paling Sering Muncul")
+st.header("📊 Analisis Kata Paling Sering Muncul")
 articles = load_articles_from_mongodb()
-st.write(f"\ud83d\udcda Total artikel di database: {len(articles)}")
+st.write(f"📚 Total artikel di database: {len(articles)}")
 contents = [article['content'] for article in articles if article.get('content')]
 
 if contents:
-    factory = StopWordRemoverFactory()
-    ind_stopword = factory.get_stop_words()
-    st.info("\ud83d\udd04 Melakukan preprocessing dan analisis...")
+    st.info("🔄 Melakukan preprocessing dan analisis...")
     processed_tokens_list = preprocess_text_list(contents)
     all_tokens = [token for tokens in processed_tokens_list for token in tokens]
     word_counts = Counter(all_tokens)
     top_words = word_counts.most_common(10)
 
-    st.subheader("\ud83d\udd0d Top 10 Kata")
+    st.subheader("🔍 Top 10 Kata")
     st.write(top_words)
 
-    st.subheader("\ud83d\udcc8 Visualisasi Frekuensi Kata (Line Chart)")
-    fig_line = plot_top_words_line(top_words)
-    st.pyplot(fig_line)
-
-    st.subheader("\ud83d\udcca Visualisasi Bar Chart Horizontal")
+    st.subheader("📈 Visualisasi Frekuensi Kata (Bar Chart)")
     fig_bar = plot_top_words_bar(top_words)
     st.pyplot(fig_bar)
 
-    st.subheader("\u2601\ufe0f Word Cloud")
-    fig_wc = plot_wordcloud(word_counts)
-    st.pyplot(fig_wc)
+    st.header("📆 Grafik Jumlah Artikel Dicrawling (Line Chart)")
+    group_by = st.selectbox("Group berdasarkan:", ["daily", "weekly"])
+    stats_df = get_crawl_stats_by_date(group_by=group_by)
 
+    if not stats_df.empty:
+        st.write(f"Data dari: {stats_df['period'].min()} sampai {stats_df['period'].max()}")
+        fig_line = plot_article_trend(stats_df)
+        st.pyplot(fig_line)
+    else:
+        st.info("Belum ada data crawling dengan timestamp.")
 else:
     st.warning("Belum ada konten artikel yang tersedia untuk dianalisis.")
