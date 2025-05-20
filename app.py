@@ -4,11 +4,6 @@ import schedule
 import threading
 import time
 import requests
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import NoSuchElementException, ElementClickInterceptedException
-from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
 from datetime import datetime
@@ -21,13 +16,15 @@ import matplotlib.pyplot as plt
 
 nltk.download('punkt')
 
+# Daftar stopwords tambahan
 custom_stopwords = [
     "menjadi", "lebih", "banyak", "memiliki", "dapat", "akan", "dengan",
     "adalah", "karena", "juga", "seperti", "dalam", "yang", "untuk", "oleh",
-    "sudah", "masih", "namun", "hingga", "tanpa", "pada", "bahwa", "agar", "berbagai", "orang", 
-    "memberikan", "kompasiana", "komentar", "selanjutnya"
+    "sudah", "masih", "namun", "hingga", "tanpa", "pada", "bahwa", "agar", 
+    "berbagai", "orang", "memberikan", "kompasiana", "komentar", "selanjutnya"
 ]
 
+# Koneksi MongoDB
 def get_mongo_client():
     mongo_uri = os.getenv("MONGODB_CONNECTION_STRING")
     if not mongo_uri:
@@ -47,9 +44,11 @@ def save_to_mongodb(data, db_name="artikel_db", collection_name="test"):
         st.write(f"[=] Sudah ada: {data['title']}")
         return False
 
+# Ambil konten artikel
 def crawl_article(url):
     try:
-        response = requests.get(url)
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers)
         soup = BeautifulSoup(response.text, 'html.parser')
         title = soup.find('h1').text if soup.find('h1') else 'No Title'
         paragraphs = soup.find_all('p')
@@ -59,58 +58,54 @@ def crawl_article(url):
         st.write(f"[ERROR] Gagal crawling artikel: {e}")
         return None
 
+# Crawl halaman utama kompasiana fashion
 def crawl_kompasiana():
-    st.write(f"\U0001F680 Memulai crawling pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless")
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    st.write(f"\U0001F680 Memulai crawling tanpa Selenium pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    headers = {"User-Agent": "Mozilla/5.0"}
+    artikel_terkumpul = 0
+    base_url = "https://www.kompasiana.com/tag/fashion"
+    
+    try:
+        for page in range(1, 6):  # Ambil sampai 5 halaman
+            page_url = f"{base_url}?page={page}"
+            response = requests.get(page_url, headers=headers)
+            soup = BeautifulSoup(response.text, "html.parser")
+            articles = soup.find_all("div", class_="timeline--item")
 
-    url = "https://www.kompasiana.com/tag/fashion"
-    driver.get(url)
-    time.sleep(2)
+            if not articles:
+                st.write(f"❌ Tidak menemukan artikel di halaman: {page_url}")
+                break
 
-    for _ in range(10):
-        try:
-            load_more = driver.find_element(By.ID, "load-more-index-tag")
-            driver.execute_script("arguments[0].click();", load_more)
-            time.sleep(3)
-        except:
-            break
+            for item in articles:
+                content_div = item.find("div", class_="artikel--content")
+                if not content_div:
+                    continue
+                title_tag = content_div.find("h2")
+                if title_tag and title_tag.a:
+                    url = title_tag.a['href'].strip()
+                    detail = crawl_article(url)
+                    if detail:
+                        baru = save_to_mongodb(detail)
+                        if baru:
+                            artikel_terkumpul += 1
+        st.write(f"✅ Selesai crawling. Artikel baru disimpan: {artikel_terkumpul}")
+    except Exception as e:
+        st.error(f"[ERROR] Gagal crawling: {e}")
 
-    soup = BeautifulSoup(driver.page_source, "html.parser")
-    articles = soup.find_all("div", class_="timeline--item")
-    st.write(f"📄 Artikel ditemukan: {len(articles)}")
-
-    for item in articles:
-        try:
-            content_div = item.find("div", class_="artikel--content")
-            if not content_div:
-                continue
-            title_tag = content_div.find("h2")
-            if title_tag and title_tag.a:
-                url = title_tag.a['href'].strip()
-                detail = crawl_article(url)
-                if detail:
-                    baru = save_to_mongodb(detail)
-                    if not baru:
-                        break
-        except Exception as e:
-            st.write(f"[ERROR] {e}")
-
-    driver.quit()
-    st.write("✅ Selesai crawling.\n")
-
+# Thread scheduler
 def run_schedule():
     while True:
         schedule.run_pending()
         time.sleep(1)
 
+# Load artikel dari database
 def load_articles_from_mongodb(db_name="artikel_db", collection_name="test"):
     client = get_mongo_client()
     db = client[db_name]
     collection = db[collection_name]
     return list(collection.find())
 
+# Statistik jumlah artikel
 def get_crawl_stats_by_date(group_by="daily"):
     articles = load_articles_from_mongodb()
     df = pd.DataFrame(articles)
@@ -124,11 +119,11 @@ def get_crawl_stats_by_date(group_by="daily"):
     count_df = df.groupby('period').size().reset_index(name='jumlah')
     return count_df
 
+# Preprocessing teks
 def preprocess_text_list(text_list):
     factory = StopWordRemoverFactory()
     default_stopwords = factory.get_stop_words()
     stopword_list = set(default_stopwords + custom_stopwords)
-
     data_casefolding = pd.Series([text.lower() for text in text_list])
     filtering = data_casefolding.str.replace(r'[\W_]+', ' ', regex=True)
     data_tokens = [word_tokenize(line) for line in filtering]
@@ -139,6 +134,7 @@ def preprocess_text_list(text_list):
     data_stopremoved = [stopword_filter(tokens) for tokens in data_tokens]
     return data_stopremoved
 
+# Visualisasi top word
 def plot_top_words_bar(top_words):
     words, counts = zip(*top_words)
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -150,6 +146,7 @@ def plot_top_words_bar(top_words):
     plt.tight_layout()
     return fig
 
+# Grafik artikel per waktu
 def plot_article_trend(df):
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(df['period'], df['jumlah'], marker='o', color='green', linewidth=2)
@@ -161,7 +158,7 @@ def plot_article_trend(df):
     plt.tight_layout()
     return fig
 
-# Streamlit App UI
+# Streamlit UI
 st.title("📰 Auto Crawler + Analisis Artikel Kompasiana")
 st.write("Crawling artikel dan menganalisis kata yang sering muncul")
 
@@ -180,7 +177,7 @@ if st.sidebar.button("🚀 Jalankan Sekarang"):
     st.session_state.run_mode = "manual"
     crawl_kompasiana()
 
-# Analisis kata
+# Analisis Kata
 st.header("📊 Analisis Kata Paling Sering Muncul")
 articles = load_articles_from_mongodb()
 st.write(f"📚 Total artikel di database: {len(articles)}")
