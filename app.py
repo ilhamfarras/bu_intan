@@ -14,7 +14,7 @@ import nltk
 import pandas as pd
 import matplotlib.pyplot as plt
 
-nltk.download('punkt')
+nltk.download('punkt_tab')
 
 # Daftar stopwords tambahan
 custom_stopwords = [
