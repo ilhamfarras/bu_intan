@@ -3,11 +3,6 @@ import schedule
 import threading
 import time
 import requests
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import NoSuchElementException, ElementClickInterceptedException
-from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
 from datetime import datetime
@@ -19,7 +14,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 
-
 custom_stopwords = [
     "menjadi", "lebih", "banyak", "memiliki", "dapat", "akan", "dengan",
     "adalah", "karena", "juga", "seperti", "dalam", "yang", "untuk", "oleh",
@@ -27,7 +21,7 @@ custom_stopwords = [
     "memberikan", "kompasiana", "komentar", "selanjutnya"
 ]
 
-nltk.download('punkt_tab')
+nltk.download('punkt')
 
 # Fungsi MongoDB
 def save_to_mongodb(data, db_name="artikel_db", collection_name="test"):
@@ -56,47 +50,41 @@ def crawl_article(url):
         return None
 
 # Fungsi utama crawling
-def crawl_kompasiana():
-    st.write(f"\U0001F680 Memulai crawling pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless")
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+def crawl_kompasiana(max_articles=50):
+    st.write(f"\U0001F680 Memulai crawling (tanpa Selenium) pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    base_url = "https://www.kompasiana.com/tag/fashion"
+    articles_crawled = 0
+    offset = 0
+    all_links = set()
 
-    url = "https://www.kompasiana.com/tag/fashion"
-    driver.get(url)
-    time.sleep(2)
+    while articles_crawled < max_articles:
+        url = f"{base_url}?offset={offset}"
+        response = requests.get(url)
+        soup = BeautifulSoup(response.text, "html.parser")
+        articles = soup.find_all("div", class_="timeline--item")
 
-    max_click = 50
-    for i in range(max_click):
-        try:
-            load_more = driver.find_element(By.ID, "load-more-index-tag")
-            driver.execute_script("arguments[0].click();", load_more)
-            time.sleep(3)
-        except:
+        if not articles:
             break
 
-    soup = BeautifulSoup(driver.page_source, "html.parser")
-    articles = soup.find_all("div", class_="timeline--item")
-    st.write(f"📄 Artikel ditemukan: {len(articles)}")
-
-    for item in articles:
-        try:
+        for item in articles:
+            if articles_crawled >= max_articles:
+                break
             content_div = item.find("div", class_="artikel--content")
             if not content_div:
                 continue
             title_tag = content_div.find("h2")
             if title_tag and title_tag.a:
-                url = title_tag.a['href'].strip()
-                detail = crawl_article(url)
-                if detail:
-                    baru = save_to_mongodb(detail)
-                    if not baru:
-                        continue
-        except Exception as e:
-            st.write(f"[ERROR] {e}")
+                link = title_tag.a['href'].strip()
+                if link not in all_links:
+                    detail = crawl_article(link)
+                    if detail:
+                        if save_to_mongodb(detail):
+                            articles_crawled += 1
+                            all_links.add(link)
+        offset += 10
+        time.sleep(1)
 
-    driver.quit()
-    st.write("\u2705 Selesai crawling.\n")
+    st.write(f"\u2705 Selesai crawling. Artikel baru: {articles_crawled}")
 
 # Scheduler
 def run_schedule():
@@ -158,51 +146,50 @@ def plot_wordcloud(word_counts):
     plt.tight_layout()
     return fig
 
-
 # Streamlit App UI
-st.title("📰 Auto Crawler + Analisis Artikel Kompasiana")
+st.title("\ud83d\udcf0 Auto Crawler + Analisis Artikel Kompasiana")
 st.write("Crawling artikel dan menganalisis kata yang sering muncul")
 
-st.sidebar.title("⚙ Pengaturan")
-interval = st.sidebar.selectbox("⏱ Interval Crawling:", ["1 jam", "2 jam", "5 jam", "12 jam", "24 jam"])
+st.sidebar.title("\u2699 Pengaturan")
+interval = st.sidebar.selectbox("\u23f1 Interval Crawling:", ["1 jam", "2 jam", "5 jam", "12 jam", "24 jam"])
 
-if st.sidebar.button("✅ Aktifkan Jadwal"):
+if st.sidebar.button("\u2705 Aktifkan Jadwal"):
     hours = int(interval.split()[0])
     schedule.every(hours).hours.do(crawl_kompasiana)
     st.sidebar.success(f"Crawling dijadwalkan setiap {hours} jam.")
     scheduler_thread = threading.Thread(target=run_schedule, daemon=True)
     scheduler_thread.start()
 
-if st.sidebar.button("🚀 Jalankan Sekarang"):
+if st.sidebar.button("\ud83d\ude80 Jalankan Sekarang"):
     crawl_kompasiana()
 
 # Analisis kata
-st.header("📊 Analisis Kata Paling Sering Muncul")
+st.header("\ud83d\udcca Analisis Kata Paling Sering Muncul")
 articles = load_articles_from_mongodb()
-st.write(f"📚 Total artikel di database: {len(articles)}")
+st.write(f"\ud83d\udcda Total artikel di database: {len(articles)}")
 contents = [article['content'] for article in articles if article.get('content')]
 
 if contents:
     factory = StopWordRemoverFactory()
     ind_stopword = factory.get_stop_words()
-    st.info("🔄 Melakukan preprocessing dan analisis...")
+    st.info("\ud83d\udd04 Melakukan preprocessing dan analisis...")
     processed_tokens_list = preprocess_text_list(contents)
     all_tokens = [token for tokens in processed_tokens_list for token in tokens]
     word_counts = Counter(all_tokens)
     top_words = word_counts.most_common(10)
 
-    st.subheader("🔍 Top 10 Kata")
+    st.subheader("\ud83d\udd0d Top 10 Kata")
     st.write(top_words)
 
-    st.subheader("📈 Visualisasi Frekuensi Kata (Line Chart)")
+    st.subheader("\ud83d\udcc8 Visualisasi Frekuensi Kata (Line Chart)")
     fig_line = plot_top_words_line(top_words)
     st.pyplot(fig_line)
 
-    st.subheader("📊 Visualisasi Bar Chart Horizontal")
+    st.subheader("\ud83d\udcca Visualisasi Bar Chart Horizontal")
     fig_bar = plot_top_words_bar(top_words)
     st.pyplot(fig_bar)
 
-    st.subheader("☁️ Word Cloud")
+    st.subheader("\u2601\ufe0f Word Cloud")
     fig_wc = plot_wordcloud(word_counts)
     st.pyplot(fig_wc)
 
