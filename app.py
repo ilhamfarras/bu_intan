@@ -20,6 +20,12 @@ import matplotlib.pyplot as plt
 
 nltk.download('punkt')
 
+# Inisialisasi session state variabel
+if "run_mode" not in st.session_state:
+    st.session_state["run_mode"] = None
+if "scheduler_running" not in st.session_state:
+    st.session_state["scheduler_running"] = False
+
 custom_stopwords = [
     "menjadi", "lebih", "banyak", "memiliki", "dapat", "akan", "dengan",
     "adalah", "karena", "juga", "seperti", "dalam", "yang", "untuk", "oleh",
@@ -27,9 +33,8 @@ custom_stopwords = [
     "memberikan", "kompasiana", "komentar", "selanjutnya"
 ]
 
-run_mode = st.session_state.get("run_mode", None)
-
 def save_to_mongodb(data, db_name="artikel_db", collection_name="test"):
+    # NOTE: Ganti connection string ini jika deploy di cloud dan MongoDB tidak lokal
     client = MongoClient("mongodb://localhost:27017/")
     db = client[db_name]
     collection = db[collection_name]
@@ -58,6 +63,11 @@ def crawl_kompasiana():
     st.write(f"\U0001F680 Memulai crawling pada {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     options = webdriver.ChromeOptions()
     options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
     url = "https://www.kompasiana.com/tag/fashion"
@@ -69,7 +79,7 @@ def crawl_kompasiana():
             load_more = driver.find_element(By.ID, "load-more-index-tag")
             driver.execute_script("arguments[0].click();", load_more)
             time.sleep(3)
-        except:
+        except Exception:
             break
 
     soup = BeautifulSoup(driver.page_source, "html.parser")
@@ -109,7 +119,7 @@ def load_articles_from_mongodb(db_name="artikel_db", collection_name="test"):
 def get_crawl_stats_by_date(group_by="daily"):
     articles = load_articles_from_mongodb()
     df = pd.DataFrame(articles)
-    if 'created_at' not in df:
+    if 'created_at' not in df or df.empty:
         return pd.DataFrame()
     df['created_at'] = pd.to_datetime(df['created_at'])
     if group_by == "weekly":
@@ -164,15 +174,19 @@ st.sidebar.title("⚙ Pengaturan")
 interval = st.sidebar.selectbox("⏱ Interval Crawling:", ["1 jam", "2 jam", "5 jam", "12 jam", "24 jam"])
 
 if st.sidebar.button("✅ Aktifkan Jadwal"):
-    hours = int(interval.split()[0])
-    schedule.every(hours).hours.do(crawl_kompasiana)
-    st.sidebar.success(f"Crawling dijadwalkan setiap {hours} jam.")
-    st.session_state.run_mode = "jadwal"
-    scheduler_thread = threading.Thread(target=run_schedule, daemon=True)
-    scheduler_thread.start()
+    if not st.session_state["scheduler_running"]:
+        hours = int(interval.split()[0])
+        schedule.every(hours).hours.do(crawl_kompasiana)
+        st.sidebar.success(f"Crawling dijadwalkan setiap {hours} jam.")
+        st.session_state["run_mode"] = "jadwal"
+        scheduler_thread = threading.Thread(target=run_schedule, daemon=True)
+        scheduler_thread.start()
+        st.session_state["scheduler_running"] = True
+    else:
+        st.sidebar.warning("Scheduler sudah berjalan.")
 
 if st.sidebar.button("🚀 Jalankan Sekarang"):
-    st.session_state.run_mode = "manual"
+    st.session_state["run_mode"] = "manual"
     crawl_kompasiana()
 
 # Analisis kata
