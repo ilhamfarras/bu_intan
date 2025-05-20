@@ -27,32 +27,12 @@ custom_stopwords = [
     "memberikan", "kompasiana", "komentar", "selanjutnya"
 ]
 
-# ===== Inisialisasi MongoDB Atlas =====
-def get_collection(db_name="artikel_db", collection_name="test"):
-    try:
-        mongo_uri = st.secrets["mongo"]["uri"]
-        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
-        client.admin.command('ping')
-        st.success("✔️ Koneksi ke MongoDB Atlas berhasil")
+run_mode = st.session_state.get("run_mode", None)
 
-        db = client[db_name]
-        collection = db[collection_name]
-
-        try:
-            idx_name = collection.create_index("url", unique=True)
-            st.info(f"✔️ Index unik pada 'url' berhasil dibuat (name: {idx_name})")
-        except Exception as index_err:
-            st.warning(f"⚠️ Gagal membuat index unik pada 'url':\n{index_err}")
-
-        return collection
-
-    except Exception as e:
-        st.error(f"❌ Gagal koneksi ke MongoDB Atlas:\n{e}")
-        st.stop()
-
-# ===== CRUD =====
 def save_to_mongodb(data, db_name="artikel_db", collection_name="test"):
-    collection = get_collection(db_name, collection_name)
+    client = MongoClient("mongodb://localhost:27017/")
+    db = client[db_name]
+    collection = db[collection_name]
     data['created_at'] = datetime.now()
     if collection.count_documents({"url": data["url"]}) == 0:
         collection.insert_one(data)
@@ -62,11 +42,6 @@ def save_to_mongodb(data, db_name="artikel_db", collection_name="test"):
         st.write(f"[=] Sudah ada: {data['title']}")
         return False
 
-def load_articles_from_mongodb(db_name="artikel_db", collection_name="test"):
-    collection = get_collection(db_name, collection_name)
-    return list(collection.find())
-
-# ===== Crawling Kompasiana =====
 def crawl_article(url):
     try:
         response = requests.get(url)
@@ -125,7 +100,12 @@ def run_schedule():
         schedule.run_pending()
         time.sleep(1)
 
-# ===== Analisis & Visualisasi =====
+def load_articles_from_mongodb(db_name="artikel_db", collection_name="test"):
+    client = MongoClient("mongodb://localhost:27017/")
+    db = client[db_name]
+    collection = db[collection_name]
+    return list(collection.find())
+
 def get_crawl_stats_by_date(group_by="daily"):
     articles = load_articles_from_mongodb()
     df = pd.DataFrame(articles)
@@ -176,7 +156,7 @@ def plot_article_trend(df):
     plt.tight_layout()
     return fig
 
-# ===== Streamlit UI =====
+# Streamlit App UI
 st.title("📰 Auto Crawler + Analisis Artikel Kompasiana")
 st.write("Crawling artikel dan menganalisis kata yang sering muncul")
 
@@ -195,7 +175,7 @@ if st.sidebar.button("🚀 Jalankan Sekarang"):
     st.session_state.run_mode = "manual"
     crawl_kompasiana()
 
-# ===== Analisis Kata =====
+# Analisis kata
 st.header("📊 Analisis Kata Paling Sering Muncul")
 articles = load_articles_from_mongodb()
 st.write(f"📚 Total artikel di database: {len(articles)}")
