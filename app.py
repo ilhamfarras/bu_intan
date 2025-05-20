@@ -26,9 +26,7 @@ custom_stopwords = [
 
 # Koneksi MongoDB
 def get_mongo_client():
-    mongo_uri = os.getenv("CONNECTION_STRING")
-    if not mongo_uri:
-        raise ValueError("Environment variable MONGODB_CONNECTION_STRING belum diset!")
+    mongo_uri = st.secrets["MONGODB"]["CONNECTION_STRING"]
     return MongoClient(mongo_uri)
 
 def save_to_mongodb(data, db_name="artikel_db", collection_name="test"):
