@@ -5,7 +5,8 @@ selenium
 webdriver-manager
 beautifulsoup4
 pymongo
+Sastrawi
 nltk
-sastrawi
 pandas
 matplotlib
+wordcloud
