@@ -35,7 +35,7 @@ custom_stopwords = [
 
 def save_to_mongodb(data, db_name="artikel_db", collection_name="test"):
     # NOTE: Ganti connection string ini jika deploy di cloud dan MongoDB tidak lokal
-    client = MongoClient("mongodb://localhost:27017/")
+    client = MongoClient("mongodb+srv://test:test123@cluster1.bv983sn.mongodb.net/?retryWrites=true&w=majority&appName=Cluster1")
     db = client[db_name]
     collection = db[collection_name]
     data['created_at'] = datetime.now()
