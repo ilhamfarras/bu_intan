@@ -13,6 +13,7 @@ from nltk.tokenize import word_tokenize
 import nltk
 import pandas as pd
 import matplotlib.pyplot as plt
+import re
 
 nltk.download('punkt_tab')
 
@@ -55,6 +56,14 @@ def crawl_article(url):
     except Exception as e:
         st.write(f"[ERROR] Gagal crawling artikel: {e}")
         return None
+
+def clean_text(text):
+    # Hanya pertahankan karakter alfabet latin, angka, dan spasi
+    return re.sub(r'[^\x00-\x7F\s\w.,;!?\'\"-]', '', text)
+
+# Setelah mengambil konten
+raw_content = "\n".join([p.text for p in paragraphs])
+content = clean_text(raw_content)
 
 # Crawl halaman utama kompasiana fashion
 def crawl_kompasiana():
