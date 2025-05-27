@@ -21,7 +21,7 @@ custom_stopwords = [
     "menjadi", "lebih", "banyak", "memiliki", "dapat", "akan", "dengan",
     "adalah", "karena", "juga", "seperti", "dalam", "yang", "untuk", "oleh",
     "sudah", "masih", "namun", "hingga", "tanpa", "pada", "bahwa", "agar", 
-    "berbagai", "orang", "memberikan", "kompasiana", "komentar", "selanjutnya","ن","ا","و",
+    "berbagai", "orang", "memberikan", "kompasiana", "komentar", "selanjutnya","ن","ا","و","ي",
 ]
 
 # Koneksi MongoDB
