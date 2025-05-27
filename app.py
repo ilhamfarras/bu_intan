@@ -58,12 +58,11 @@ def crawl_article(url):
         return None
 
 def clean_text(text):
-    # Hanya pertahankan karakter alfabet latin, angka, dan spasi
-    return re.sub(r'[^\x00-\x7F\s\w.,;!?\'\"-]', '', text)
+    # Hanya pertahankan huruf latin, angka, tanda baca umum, dan spasi
+    return re.sub(r'[^\x00-\x7F]+', ' ', text)
 
-# Setelah mengambil konten
 raw_content = "\n".join([p.text for p in paragraphs])
-content = clean_text(raw_content)
+cleaned_content = clean_text(raw_content)
 
 # Crawl halaman utama kompasiana fashion
 def crawl_kompasiana():
